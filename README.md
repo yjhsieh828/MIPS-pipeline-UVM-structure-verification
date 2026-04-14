@@ -1,6 +1,6 @@
-# MIPS Pipelined Processor with DV-style Verification
+# MIPS Pipelined Processor with UVM-structure Verification Testbench
 
-An extension of the UT Austin ECE 460M Digital Systems Lab 7 assignment — implementing a 5-stage pipelined MIPS processor in SystemVerilog, along with a DV-style testbench inspired by UVM concepts self-studied through Siemens EDA's training resources.
+An extension of the UT Austin ECE 460M Digital Systems Lab 7 assignment — implementing a 5-stage pipelined MIPS processor in SystemVerilog, along with a SystemVerilog testbench structured around UVM concepts, self-studied through Siemens onine UVM training resources.
 
 ---
 
@@ -12,7 +12,7 @@ Lab 7 originally asked for a multi-cycle MIPS processor targeting the Basys3 FPG
 
 ## Architecture
 
-### Multi-Cycle Baseline (`MIPS_b.sv`)
+### Multi-Cycle Baseline (`MIPS_pipeline.sv`)
 
 The original processor uses a 5-state FSM (Fetch → Decode → Execute → Memory → Writeback) where each instruction takes 3–5 clock cycles. A slow clock divider (~3 Hz) makes instruction execution visible on the board LEDs.
 
@@ -34,8 +34,6 @@ Key design decisions:
 - MEM/WB → EX: result two instructions back forwarded, with priority given to the closer source
 - Load-use stall: when a `LW` is immediately followed by an instruction reading the loaded register, the pipeline stalls one cycle (PC and IF/ID frozen, NOP bubble inserted into ID/EX)
 - `ex_mem_rt_data` also carries the forwarded value so that `SW` writes correct data even when its source register was just written
-
-**Control hazard** — Branch and jump resolution happens in EX stage after ALU comparison. On a taken branch or any jump (J/JAL/JR), two pipeline registers (IF/ID and ID/EX) are flushed with NOPs and PC is redirected to the correct target.
 
 **HALT** — PC freezes when HALT is asserted; instructions already in the pipeline drain normally.
 
@@ -152,21 +150,17 @@ program_partB.hex      — Part B test program machine code
 
 ## Tools
 
-- **Simulation**: ModelSim / Questa (`vlog -sv`, `vsim -voptargs=+acc`)
-- **Synthesis**: Vivado 2024 → Basys3 (Artix-7 XC7A35T)
-- **Board**: Digilent Basys3
+- **Simulation**: ModelSim (run.do stript including `vlog -sv`, `vsim -voptargs=+acc`)
 
 ---
 
 ## Status
 
-- [x] Multi-cycle MIPS (Part A + Part B)
+- [x] Multi-cycle MIPS (ECE460M lab7)
 - [x] 5-stage pipeline core
 - [x] Forwarding (EX/MEM→EX, MEM/WB→EX)
-- [x] Load-use stall
+- [x] Load-use hazard stall
 - [x] DV testbench with scoreboard and coverage
-- [ ] Branch prediction (currently always flush 2 cycles)
-- [ ] Synthesize pipeline to Basys3
 - [ ] Complete Siemens UVM training and port testbench to true UVM
 
 ---
