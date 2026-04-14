@@ -101,34 +101,53 @@ The testbench is structured around UVM concepts adapted to plain SystemVerilog, 
 ### Sample output
 
 ```
-===== PHASE 5: Hazard Tests =====
-
-  [TEST] EX→EX Forwarding: addi $3,7 then add $2=$3
-  [MONITOR] 應看到 fwdA=10（EX forwarding）:
-  cyc=89  PC=01 | IF=00000000 ID=20030007 | fwdA=10 fwdB=00 stall=0 flush=0 | EX_rd=03 EX_res=00000007
-  [PASS] FORWARDING   got=0x00000007
-
-  [TEST] Load-Use Stall: lw $3 then immediately use $3
-  [MONITOR] 應看到 stall=1：
-  cyc=102 PC=01 | IF=00000000 ID=8c030000 | fwdA=00 fwdB=00 stall=1 flush=0 | EX_rd=03 EX_res=00000000
-  [PASS] LOAD-USE     got=0x12345678
-
-============================================================
-  SCOREBOARD REPORT
-  Total : 28  |  PASS : 28  |  FAIL : 0
-  *** ALL TESTS PASSED ***
-
-============================================================
-  COVERAGE REPORT
-  Instruction coverage : 22/22 (100.0%)
-  Hazard coverage:
-    EX/MEM→EX forwarding : HIT
-    MEM/WB→EX forwarding : HIT
-    Load-use stall       : HIT
-    Branch/Jump flush    : HIT
-    HALT                 : HIT
-    RESET                : HIT
-============================================================
+# ===== PHASE 7: HALT =====
+#   [MON] reg2_out=0x00000001  cyc=551  PC=1
+#   before HALT: PC=0  $2=0x00000001
+#   freeze: PC=2
+#   [PASS] HALT 10 cycles PC frozen
+#   [PASS] HALT        got=0x00000001
+#   release HALT: PC=2
+# 
+# ============================================================
+#   SCOREBOARD REPORT
+#   Total : 28  |  PASS : 28  |  FAIL : 0
+#   *** ALL TESTS PASSED ***
+# ============================================================
+# 
+# ============================================================
+#   COVERAGE REPORT
+#   Instruction coverage : 22/22 (100.0%)
+#     ADD        :  HIT
+#     ADDI       :  HIT
+#     SUB        :  HIT
+#     AND        :  HIT
+#     OR         :  HIT
+#     XOR        :  HIT
+#     SLL        :  HIT
+#     SRL        :  HIT
+#     LUI        :  HIT
+#     LW         :  HIT
+#     SW         :  HIT
+#     BEQ        :  HIT
+#     BNE        :  HIT
+#     J          :  HIT
+#     JAL        :  HIT
+#     JR         :  HIT
+#     SLT        :  HIT
+#     RBIT       :  HIT
+#     REV        :  HIT
+#     ADD8       :  HIT
+#     SADD       :  HIT
+#     SSUB       :  HIT
+#   Hazard coverage:
+#     EX/MEMâEX forwarding :  HIT
+#     MEM/WBâEX forwarding :  HIT
+#     Load-use stall       :  HIT
+#     Branch/Jump flush    :  HIT
+#     HALT                 :  HIT
+#     RESET                :  HIT
+# ============================================================
 ```
 
 ---
