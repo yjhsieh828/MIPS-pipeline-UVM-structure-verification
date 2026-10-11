@@ -47,6 +47,8 @@
 `define OP_FWD    5'd24
 `define OP_STALL  5'd25
 
+`define OP_FIB   5'd26
+
 module MIPS_Testbench;
 
   reg CLK;
@@ -78,6 +80,11 @@ module MIPS_Testbench;
   reg        fwd_ae, fwd_am, fwd_be, fwd_bm;
   reg        stall_r, flush_r;
 
+  //reg id_ex_branch_r, branch_taken_ex_r, id_ex_jr_r, btb_mispredict_r;
+  reg id_ex_jr_r;
+  reg [6:0] jump_target_r;
+
+
   always @(*) begin
     PC_r       = DUT.PC;
     if_id_i    = DUT.if_id_instr;
@@ -89,6 +96,12 @@ module MIPS_Testbench;
     fwd_bm     = DUT.fwd_b_mem;
     stall_r    = DUT.stall;
     flush_r    = DUT.flush;
+
+    //id_ex_branch_r = DUT.id_ex_branch;
+    //branch_taken_ex_r = DUT.branch_taken_ex;
+    id_ex_jr_r = DUT.id_ex_jr;
+    jump_target_r = DUT.jump_target;
+    //btb_mispredict_r = DUT.btb_mispredict;
   end
 
   // ============================================================
@@ -100,16 +113,17 @@ module MIPS_Testbench;
   integer    mbox_cnt;
 
   integer total_checks, total_pass, total_fail;
+  integer total_branches, total_taken, total_calls, total_btb_mispredict;
 
   initial begin
     mbox_wptr = 0; mbox_rptr = 0; mbox_cnt = 0;
     total_checks = 0; total_pass = 0; total_fail = 0;
+    total_branches = 0; total_taken = 0; total_calls = 0; total_btb_mispredict = 0;
   end
 
   // ============================================================
   // DRIVER tasks (用pc看執行結束否)
   // ============================================================
-
   task drv_wait;
     input integer n;
     integer k;
@@ -118,10 +132,10 @@ module MIPS_Testbench;
 
   task drv_reset;
     begin
+      @(negedge CLK);
       RST = 1; HALT = 0;
-      @(posedge CLK); @(posedge CLK);
+      repeat (2) @(negedge CLK);
       RST = 0;
-      @(posedge CLK);
     end
   endtask
 
@@ -255,6 +269,7 @@ module MIPS_Testbench;
         `OP_HALT:  name = "HALT      ";
         `OP_FWD:   name = "FORWARDING";
         `OP_STALL: name = "LOAD-USE  ";
+        `OP_FIB:   name = "FIBONACCI ";
         default:   name = "UNKNOWN   ";
       endcase
 
@@ -312,13 +327,24 @@ module MIPS_Testbench;
       if (fwd_am || fwd_bm) cov_fwd_mem_hit <= 1;
       if (stall_r)          cov_stall_hit   <= 1;
       if (flush_r)          cov_flush_hit   <= 1;
+      // HBT & RAS
+      /*if(id_ex_branch_r) begin
+        total_branches <= total_branches + 1;
+        if (branch_taken_ex_r) total_taken <= total_taken + 1;
+      end
+      if(id_ex_jr_r) begin
+        total_calls <= total_calls + 1;
+      end
+      if(btb_mispredict_r) begin
+        total_btb_mispredict <= total_btb_mispredict + 1;
+      end*/
     end
   end
 
   task cov_report;
     integer i, hit;
     real pct;
-    reg [79:0] op_names [0:25];
+    reg [79:0] op_names [0:26];
     begin
       op_names[0]  = "ADD       "; op_names[1]  = "ADDI      ";
       op_names[2]  = "SUB       "; op_names[3]  = "AND       ";
@@ -333,15 +359,16 @@ module MIPS_Testbench;
       op_names[20] = "SADD      "; op_names[21] = "SSUB      ";
       op_names[22] = "RESET     "; op_names[23] = "HALT      ";
       op_names[24] = "FORWARDING"; op_names[25] = "LOAD-USE  ";
+      op_names[26] = "FIBONACCI ";
 
       $display("\n============================================================");
       $display("  COVERAGE REPORT");
 
       hit = 0;
-      for (i=0; i<22; i=i+1) if (cov_op_hit[i]) hit = hit + 1;
-      pct = hit * 100.0 / 22.0;
-      $display("  Instruction coverage : %0d/22 (%.1f%%)", hit, pct);
-      for (i=0; i<22; i=i+1)
+      for (i=0; i<27; i=i+1) if (cov_op_hit[i]) hit = hit + 1;
+      pct = hit * 100.0 / 27.0;
+      $display("  Instruction coverage : %0d/27 (%.1f%%)", hit, pct);
+      for (i=0; i<27; i=i+1)
         $display("    %-10s : %s", op_names[i], cov_op_hit[i] ? "HIT" : "MISS");
 
       $display("  Hazard coverage:");
@@ -351,6 +378,10 @@ module MIPS_Testbench;
       $display("    Branch/Jump flush    : %s", cov_flush_hit   ? "HIT" : "MISS");
       $display("    HALT                 : %s", cov_halt_hit    ? "HIT" : "MISS");
       $display("    RESET                : %s", cov_reset_hit   ? "HIT" : "MISS");
+      /*$display("  Branch/Jump statistics at FIBONACCI:");
+      $display("    Total branches (taken/all): %0d / %0d", total_taken, total_branches);
+      $display("    Total BTB predict accuracy: %.1f%%", (100.0 - real'(total_btb_mispredict) / real'(total_branches) *100.0));
+      $display("    Total jump calls          : %0d", total_calls);*/
       $display("============================================================");
     end
   endtask
@@ -425,7 +456,7 @@ module MIPS_Testbench;
   reg [31:0] ref_A, ref_B;
 
   initial begin
-    RST = 1; HALT = 0;
+    //RST = 1; HALT = 0;
     drv_wait(2);
 
     $display("============================================================");
@@ -682,23 +713,6 @@ module MIPS_Testbench;
     cov_sample(`OP_BNE);
     sb_check;
 
-    // ---- J: 跳到 addr 3，跳過中間的 addi ------------------
-    $display("\n  [TEST] J: jump to addr 3, skip addr 1~2");
-    load_prog(
-      enc_j(6'b000010, 26'd3),                // j 3
-      enc_i(6'b001000, 5'd0, 5'd2, 16'hDEAD), // addi (skipped)
-      enc_i(6'b001000, 5'd0, 5'd2, 16'hDEAD), // addi (skipped)
-      enc_i(6'b001000, 5'd0, 5'd2, 16'h1234), // addi $2,$0,0x1234
-      32'h0, 32'h0, 32'h0, 32'h0,
-      32'h0, 32'h0, 32'h0, 32'h0,
-      32'h0, 32'h0, 32'h0, 32'h0
-    );
-    drv_drain(7'd3);
-    mon_watch(15);
-    mb_write(`OP_J, DUT.REGS[2], 32'h00001234);
-    cov_sample(`OP_J);
-    sb_check;
-
     // ---- JAL + JR ------------------------------------------
     // jal 5        → $31 = 1，PC = 5
     // nop nop nop (addr 1~4，不會執行)
@@ -721,6 +735,23 @@ module MIPS_Testbench;
     cov_sample(`OP_JAL);
     cov_sample(`OP_JR);
     sb_check; sb_check;
+
+    // ---- J: 跳到 addr 3，跳過中間的 addi ------------------
+    $display("\n  [TEST] J: jump to addr 3, skip addr 1~2");
+    load_prog(
+      enc_j(6'b000010, 26'd3),                // j 3
+      enc_i(6'b001000, 5'd0, 5'd2, 16'hDEAD), // addi (skipped)
+      enc_i(6'b001000, 5'd0, 5'd2, 16'hDEAD), // addi (skipped)
+      enc_i(6'b001000, 5'd0, 5'd2, 16'h1234), // addi $2,$0,0x1234
+      32'h0, 32'h0, 32'h0, 32'h0,
+      32'h0, 32'h0, 32'h0, 32'h0,
+      32'h0, 32'h0, 32'h0, 32'h0
+    );
+    drv_drain(7'd3);
+    mon_watch(15);
+    mb_write(`OP_J, DUT.REGS[2], 32'h00001234);
+    cov_sample(`OP_J);
+    sb_check;
 
     // ==========================================================
     // PHASE 5: Hazard 專項測試
@@ -927,11 +958,78 @@ module MIPS_Testbench;
     drv_wait(5);
 
     // ==========================================================
+    // Phase 8: Fabonacci Test for Branch Prediction & Recursion(RAS)
+    // ==========================================================
+    drv_reset;
+    $display("\n===== PHASE 8 (workload): Recursive Fibonacci fib(7) =====");
+
+    begin : fib_prog
+      integer k;
+      for (k=0; k<128; k=k+1) DUT.IMEM[k] = 32'h0;
+
+      //================= 主程式 (addr 0~3) =================
+      DUT.IMEM[ 0] = enc_i(6'b001000, 5'd0,  5'd4,  16'd7);   // addi $4, $0, 7     ; n = 7 (fib 的輸入參數)
+      DUT.IMEM[ 1] = enc_i(6'b001000, 5'd0,  5'd29, 16'd90);  // addi $29,$0, 90    ; sp = 90 (軟體 stack pointer 初始值)
+      DUT.IMEM[ 2] = enc_j(6'b000011, 26'd4);                 // jal  4             ; 呼叫 fib(n)，$31 ← 3 (返回位址)
+      //DUT.IMEM[ 3] = enc_j(6'b000010, 26'd3);                 // j    3             ; 無窮自迴圈 = halt marker
+
+      //================= fib(n) 入口 (addr 4~8) =================
+      DUT.IMEM[ 4] = enc_i(6'b001000, 5'd0,  5'd9,  16'd2);   // addi $9, $0, 2     ; $9 = 2 (比較用常數)
+      DUT.IMEM[ 5] = enc_r(5'd4, 5'd9, 5'd8, 5'd0, 6'b101010);// slt  $8, $4, $9    ; $8 = (n < 2) ? 1 : 0
+      DUT.IMEM[ 6] = enc_i(6'b000100, 5'd8,  5'd0,  16'd2);   // beq  $8, $0, 2     ; 若 $8==0 (n>=2) → 跳到 addr 9 (遞迴分支)
+      DUT.IMEM[ 7] = enc_r(5'd4, 5'd0, 5'd2, 5'd0, 6'b100000);// add  $2, $4, $0    ; base case: $2 = n
+      DUT.IMEM[ 8] = enc_r(5'd31, 5'd0, 5'd0, 5'd0, 6'b001000);// jr   $31          ; base case 返回
+
+      //================= 遞迴分支 (addr 9~22) =================
+      DUT.IMEM[ 9] = enc_i(6'b001000, 5'd29, 5'd29, 16'hFFFD);// addi $29,$29,-3    ; sp -= 3 (配置 3-word stack frame)
+      DUT.IMEM[10] = enc_i(6'b101011, 5'd29, 5'd31, 16'd2);   // sw   $31, 2($29)   ; 存返回位址 (本層的 $31 要被下一個 jal 蓋掉)
+      DUT.IMEM[11] = enc_i(6'b101011, 5'd29, 5'd4,  16'd1);   // sw   $4,  1($29)   ; 存 n (本層的 $4 接下來要被改寫去算 n-1/n-2)
+      DUT.IMEM[12] = enc_i(6'b001000, 5'd4,  5'd4,  16'hFFFF);// addi $4, $4, -1    ; $4 = n-1
+      DUT.IMEM[13] = enc_j(6'b000011, 26'd4);                 // jal  4             ; 呼叫 fib(n-1)，$31 ← 14
+      DUT.IMEM[14] = enc_i(6'b101011, 5'd29, 5'd2,  16'd0);   // sw   $2,  0($29)   ; 存 fib(n-1) 的結果
+      DUT.IMEM[15] = enc_i(6'b100011, 5'd29, 5'd4,  16'd1);   // lw   $4,  1($29)   ; 恢復 n (剛才被改成 n-1 了)
+      DUT.IMEM[16] = enc_i(6'b001000, 5'd4,  5'd4,  16'hFFFE);// addi $4, $4, -2    ; $4 = n-2
+      DUT.IMEM[17] = enc_j(6'b000011, 26'd4);                 // jal  4             ; 呼叫 fib(n-2)，$31 ← 18
+      DUT.IMEM[18] = enc_i(6'b100011, 5'd29, 5'd9,  16'd0);   // lw   $9,  0($29)   ; $9 = fib(n-1) (剛存的)
+      DUT.IMEM[19] = enc_r(5'd2, 5'd9, 5'd2, 5'd0, 6'b100000);// add  $2, $2, $9    ; $2 = fib(n-2) + fib(n-1)
+      DUT.IMEM[20] = enc_i(6'b100011, 5'd29, 5'd31, 16'd2);   // lw   $31, 2($29)   ; 恢復本層的返回位址
+      DUT.IMEM[21] = enc_i(6'b001000, 5'd29, 5'd29, 16'd3);   // addi $29,$29, 3    ; sp += 3 (釋放 stack frame)
+      DUT.IMEM[22] = enc_r(5'd31, 5'd0, 5'd0, 5'd0, 6'b001000);// jr  $31           ; 返回呼叫者
+
+      drv_reset;
+    end
+
+    //total_branches = 0; total_taken = 0; total_calls = 0; total_btb_mispredict = 0;
+
+    $display("  [MONITOR] fib(7) start execution: %0d", cyc);
+    begin : fib_wait
+      integer k;
+      k = 0;
+      while (!(id_ex_jr_r && jump_target_r === 7'd3) && k < 1000) begin
+        @(posedge CLK); k = k + 1;
+        //$display("  [DRIVER] pc=%0d", DUT.PC);
+      end
+      if (k >= 1000) $display("  [DRIVER][TIMEOUT] fib did not finish");
+    end
+    drv_wait(5);
+    HALT = 1;
+    $display("  [MONITOR] fib(7) end execution: %0d", cyc);
+
+    mb_write(`OP_FIB, DUT.REGS[2], 32'd13);
+    sb_check;
+
+    /*$display("  [STATS] fib(7): branches=%0d taken=%0d (%.1f%%) calls(JAL)=%0d cycles=%0d",
+             total_branches, total_taken,
+             (total_branches > 0) ? (total_taken * 100.0 / total_branches) : 0.0,
+             total_calls, cyc);*/
+
+    // ==========================================================
     // 報告
     // ==========================================================
     sb_report;
     cov_report;
 
+    $display("[SUMMARY] total_fail=%0d",total_fail);
     $finish;
   end
 
