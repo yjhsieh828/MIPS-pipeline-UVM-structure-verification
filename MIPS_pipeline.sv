@@ -68,18 +68,6 @@ module MIPS_pipeline (
   end
 
   // =================================================================
-  // register
-  // =================================================================
-
-  reg [31:0] REGS [0:31];
-  //initial begin
-    integer ri;
-    always@(*) if(RST)for (ri=0; ri<32; ri=ri+1) REGS[ri] = 32'b0;
-  //end
-  assign reg1_out = REGS[1];
-  assign reg2_out = REGS[2];
-
-  // =================================================================
   // pc
   // =================================================================
   reg [6:0] PC;
@@ -109,8 +97,12 @@ module MIPS_pipeline (
   reg id_ex_mem_to_reg;
   reg id_ex_alu_src; //0: reg, 1: imm
   reg id_ex_branch;
-  reg id_ex_jr;
-  reg id_ex_jal;
+  reg id_ex_jr;//ras pop
+  reg id_ex_jal;//ras push
+    //branch prediction
+  reg id_ex_btb_taken;
+  reg id_ex_ras_taken;
+  reg [6:0] id_ex_ras_target;
   // ----- EX/MEM -----
   reg [31:0] ex_mem_alu_result;
   reg [31:0] ex_mem_rt_data; //for sw
@@ -130,17 +122,105 @@ module MIPS_pipeline (
   reg mem_wb_mem_to_reg;
 
   // =================================================================
+  // register
+  // =================================================================
+
+  reg [31:0] REGS [0:31];
+  integer ri;
+    //always@(*) if(RST)for (ri=0; ri<32; ri=ri+1) REGS[ri] = 32'b0;
+  always@(negedge CLK) begin
+    if(RST) for (ri=0; ri<32; ri=ri+1) REGS[ri] <= 32'b0;
+    else if(mem_wb_reg_write && mem_wb_rd != 5'b0) REGS[mem_wb_rd] <=
+            mem_wb_mem_to_reg ? mem_wb_mem_data : mem_wb_alu_result;
+  end
+  assign reg1_out = REGS[1];
+  assign reg2_out = REGS[2];
+
+  // =================================================================
+  // BTB
+  // =================================================================
+  parameter TABLE_SIZE = 6;
+  reg[1:0] bht [0:(1<<TABLE_SIZE)-1];//2-bit saturating counter
+  reg btb_valid [0:(1<<TABLE_SIZE)-1];//valid bht
+  reg [6:0] btb_tag [0:(1<<TABLE_SIZE)-1];//addr
+  reg [6:0] btb_target [0:(1<<TABLE_SIZE)-1];//predict destination
+  
+  wire [TABLE_SIZE-1:0] bht_index = if_id_pc[TABLE_SIZE-1:0];
+  wire btb_hit = btb_valid[bht_index] && (btb_tag[bht_index] == if_id_pc);
+  wire btb_taken = btb_hit && bht[bht_index][1];//MSB is prediction; id->compared at ex
+
+  //ex stage update correct data
+  wire branch_taken_ex;
+  wire [6:0] branch_target_ex;
+  integer bi;
+  initial begin
+      for (bi = 0; bi < (1<<TABLE_SIZE); bi = bi + 1) begin
+        bht[bi] <= 2'b00;
+        btb_valid[bi] <= 1'b0;
+      end
+  end
+  always@(posedge CLK) begin
+    if(id_ex_branch) begin
+      //btb update
+      btb_valid[id_ex_pc[TABLE_SIZE-1:0]] <= 1'b1;
+      btb_tag[id_ex_pc[TABLE_SIZE-1:0]] <= id_ex_pc;
+      btb_target[id_ex_pc[TABLE_SIZE-1:0]] <= branch_target_ex;
+    end
+    //bht update
+    if(id_ex_branch) begin//bigger the more likely to predict taken
+      if(branch_taken_ex) begin
+        if(bht[id_ex_pc[TABLE_SIZE-1:0]] != 2'b11) bht[id_ex_pc[TABLE_SIZE-1:0]] <= bht[id_ex_pc[TABLE_SIZE-1:0]] + 2'b01;
+      end else begin
+        if(bht[id_ex_pc[TABLE_SIZE-1:0]] != 2'b00) bht[id_ex_pc[TABLE_SIZE-1:0]] <= bht[id_ex_pc[TABLE_SIZE-1:0]] - 2'b01;
+      end
+    end
+  end
+  wire btb_mispredict = id_ex_branch && (id_ex_btb_taken != branch_taken_ex);
+  
+  // =================================================================
+  // RAS (save jr from flush)
+  // =================================================================
+  parameter RAS_SIZE = 3;//8 entries
+  reg [6:0] ras [0:(1<<RAS_SIZE)-1];//return address stack
+  reg [2:0] ras_top;//pointer
+
+  wire dec_jr; wire [4:0] dec_rs; wire pc_stall; wire flush;
+  wire ras_pop = dec_jr && (dec_rs == 5'd31) && (ras_top != 7'd0)
+                 && ~pc_stall && ~flush;
+  wire [6:0] ras_redirect_addr = ras[ras_top-1];
+  wire ras_push = id_ex_jal && (ras_top != 7'd7);
+
+  integer rai;
+  always@(posedge CLK) begin
+    if(RST) begin
+      for (rai = 0; rai < (1<<RAS_SIZE); rai = rai + 1) ras[rai] <= 7'b0;
+      ras_top <= 3'b0;
+    end else if(ras_pop) begin //jr $31 id
+        //ras_redirect_addr <= ras[ras_top-1];
+        ras_top <= ras_top - 7'd1;
+    end else if(ras_push) begin //jal ex
+        ras[ras_top] <= id_ex_pc;
+        ras_top <= ras_top + 7'd1;
+    end
+  end
+  // ras_mispredict => still flush jr @ ex
+  wire [31:0] fwd_rs_data;
+  wire ras_mispredict = id_ex_jr && (~id_ex_ras_taken ||
+                                    (id_ex_ras_target != fwd_rs_data[6:0]));
+    //normal jr or jr $31 but ras mispredict (empty/full)
+
+  // =================================================================
   // ID stage (decoder)
   // (combinational logic: if_id_instr -> control signals, imm_ext, reg data)
   // =================================================================
   wire [5:0] dec_op = `OP;
-  wire [4:0] dec_rs = `RS;
+  assign     dec_rs = `RS;
   wire [4:0] dec_rt = `RT;
   wire [4:0] dec_rd = `RD;
   wire [4:0] dec_shamt = `SHAMT;
   wire [5:0] dec_funct = `FUNCT;
   wire [15:0] dec_imm = `IMM;
-    wire [31:0] dec_imm_ext = {{16{dec_imm[15]}}, dec_imm}; //sign-extend
+  wire [31:0] dec_imm_ext = {{16{dec_imm[15]}}, dec_imm}; //sign-extend
   //rd
   wire [4:0] dec_dst = (dec_op == op_jal) ? 5'd31 : (dec_op == R) ? dec_rd : dec_rt;
   //control signals
@@ -153,7 +233,7 @@ module MIPS_pipeline (
   wire dec_mem_to_reg = (dec_op == op_lw);
   wire dec_alu_src = (dec_op != R && dec_op != op_beq && dec_op != op_bne);
   wire dec_branch = (dec_op == op_beq || dec_op == op_bne);
-  wire dec_jr = (dec_op == R && dec_funct == f_jr);
+  assign dec_jr = (dec_op == R && dec_funct == f_jr);
   wire dec_jal = (dec_op == op_jal);
   //reg data
   wire [31:0] dec_rs_data = REGS[dec_rs];
@@ -174,7 +254,14 @@ module MIPS_pipeline (
   // =================================================================
   reg halt_r;
   wire pipe_empty;
-  wire pc_stall = stall || (HALT && halt_r);
+  assign pc_stall = stall || (HALT && halt_r);
+  // =================================================================
+  // branch prediction
+  // =================================================================
+  //wire flush;//execute stage: flush IF/ID and ID/EX
+  wire dec_predict_taken = ((dec_branch && btb_taken) || ras_pop)
+                           && ~pc_stall && ~flush;
+  wire [6:0] dec_branch_target = if_id_pc + dec_imm_ext[6:0];
 
   // =================================================================
   // forwarding rs/rt data
@@ -186,7 +273,7 @@ module MIPS_pipeline (
   wire fwd_a_mem = mem_wb_reg_write && (mem_wb_rd != 5'b0) &&
                   (mem_wb_rd == id_ex_rs) &&
                    ~fwd_a_ex;
-  wire [31:0] fwd_rs_data = fwd_a_ex ? ex_mem_alu_result :
+  assign fwd_rs_data = fwd_a_ex ? ex_mem_alu_result :
                             fwd_a_mem ? (mem_wb_mem_to_reg ? mem_wb_mem_data : mem_wb_alu_result) :
                             id_ex_rs_data; //from ex: alu result, mem: alu result or mem data (lw), else from ID
   //forward alu_in_B (rt)
@@ -263,15 +350,16 @@ module MIPS_pipeline (
   // =================================================================
   // EX stage (branch select)
   // =================================================================
-  wire branch_taken = id_ex_branch && ((id_ex_op == op_beq && alu_result == 32'b1) ||
+  assign branch_taken_ex = id_ex_branch && ((id_ex_op == op_beq && alu_result == 32'b1) ||
                                        (id_ex_op == op_bne && alu_result == 32'b0));
-  wire [6:0] branch_target = id_ex_pc + id_ex_imm_ext[6:0]; //PC+1+imm, and imm already sign-extended in ID stage
+  assign branch_target_ex = id_ex_pc + id_ex_imm_ext[6:0]; //PC+1+imm, and imm already sign-extended in ID stage
   wire [6:0] jump_target = id_ex_jr?  fwd_rs_data[6:0]
                          : id_ex_instr[6:0]; //j & jal
     // flush
-  wire flush = branch_taken || id_ex_jr || id_ex_jal || (id_ex_op == op_j);
-  wire [6:0] next_pc_flush = branch_taken ? branch_target : jump_target;
-
+  assign flush = btb_mispredict || ras_mispredict || id_ex_jal || (id_ex_op == op_j);//id_ex_jr replaced with ras //no btb(in branch_taken_ex)
+  wire [6:0] next_pc_flush = btb_mispredict ? (branch_taken_ex ? branch_target_ex : id_ex_pc)
+                             : (branch_taken_ex ? branch_target_ex : jump_target);
+    //btb mispredict => branch target / normal next ; branch exe => go to branch or jump
   // =================================================================
   // sequential cpu logic
   // (update pipeline registers, pc)
@@ -282,6 +370,7 @@ module MIPS_pipeline (
       //flush all pipeline registers
       if_id_instr <= NOP_instr;
       if_id_pc <= 7'b0;
+
       id_ex_instr <= NOP_instr;
       id_ex_pc <= 7'b0;
       id_ex_rs_data <= 32'b0;
@@ -302,6 +391,10 @@ module MIPS_pipeline (
       id_ex_branch <= 1'b0;
       id_ex_jr <= 1'b0;
       id_ex_jal <= 1'b0;
+
+      id_ex_btb_taken <= 1'b0;
+      id_ex_ras_taken <= 1'b0;
+      id_ex_ras_target <= 7'b0;
 
       ex_mem_alu_result <= 32'b0;
       ex_mem_rt_data <= 32'b0;
@@ -326,9 +419,9 @@ module MIPS_pipeline (
       // WB stage
       // (write from MEM to REGS)
       // =================================
-      if (mem_wb_reg_write && mem_wb_rd != 5'b0) begin
+      /*if (mem_wb_reg_write && mem_wb_rd != 5'b0) begin
         REGS[mem_wb_rd] <= mem_wb_mem_to_reg ? mem_wb_mem_data : mem_wb_alu_result; //lw: mem data, else: alu result
-      end
+      end*/
       // =================================
       // MEM/WB pipeline register
       // =================================
@@ -355,6 +448,7 @@ module MIPS_pipeline (
       ex_mem_mem_read <= id_ex_mem_read;
       ex_mem_mem_write <= id_ex_mem_write;
       ex_mem_mem_to_reg <= id_ex_mem_to_reg;
+
       // =================================
       // ID/EX pipeline register
       // =================================
@@ -378,6 +472,9 @@ module MIPS_pipeline (
         id_ex_branch <= 1'b0;
         id_ex_jr <= 1'b0;
         id_ex_jal <= 1'b0;
+        id_ex_btb_taken <= 1'b0;
+        id_ex_ras_taken <= 1'b0;
+        id_ex_ras_target <= 7'b0;
       end else begin //normal proceed
         id_ex_instr <= if_id_instr;
         id_ex_pc <= if_id_pc;
@@ -398,14 +495,17 @@ module MIPS_pipeline (
         id_ex_branch <= dec_branch;
         id_ex_jr <= dec_jr;
         id_ex_jal <= dec_jal;
+        id_ex_btb_taken <= btb_taken;
+        id_ex_ras_taken <= ras_pop;
+        id_ex_ras_target <= ras_redirect_addr;
       end
       // =================================
       // IF/ID pipeline register
       // =================================
-      if(flush) begin
-        if_id_instr <= NOP_instr;
+      if(flush || (!pc_stall && dec_predict_taken)) begin
+        if_id_instr <= NOP_instr; //flush include mispredict, dec_predict_taken flush 1 previous instuction
         if_id_pc <= 7'b0;
-      end else if (!pc_stall) begin //normal fetch
+      end else if (!pc_stall) begin//normal fetch
         if_id_instr <= IMEM[PC];
         if_id_pc <= PC + 7'b1; //PC+1 for jal
       end else begin //stall, keep the same instruction in IF/ID
@@ -417,9 +517,14 @@ module MIPS_pipeline (
       // =================================
       if(flush)
         PC <= next_pc_flush;
-      else if (!pc_stall)
-        PC <= PC + 7'b1;
-      else
+      else if (!pc_stall) begin
+        if(dec_branch && btb_taken)
+          PC <= dec_branch_target;
+        else if(ras_pop)
+          PC <= ras_redirect_addr;
+        else
+          PC <= PC + 7'b1;
+      end else
         PC <= PC; //stall, keep the same PC
     end//end not RST
   end//end sequential cpu logic
