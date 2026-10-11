@@ -1,7 +1,8 @@
-# MIPS Pipelined Processor with UVM-structure Verification Testbench
+# MIPS Pipelined Processor with Branch Prediction, Return Address Stack, and UVM-structure Verification Testbench
 
 Developed a 5-stage pipelined MIPS processor and built a structured verification environment in SystemVerilog inspired by UVM methodology, self-studied through Siemens onine UVM training resources.
 The project focuses on validating pipeline correctness, hazard handling, and control flow through a modular testbench architecture including stimulus generation, monitoring, scoreboard checking, and functional coverage.
+An updated version further implemented a 64-entry branch target buffer with two-bit branch direction predictor, and a 8-entry return address stack. In this version, CPI speed up 2.6x with total area rose 1.56x.
 (An extension of the UT Austin ECE 460M Digital Systems Lab 7 ISA)
 
 ---
