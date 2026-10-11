@@ -37,6 +37,13 @@ Key design decisions:
 - Load-use stall: when a `LW` is immediately followed by an instruction reading the loaded register, the pipeline stalls one cycle (PC and IF/ID frozen, NOP bubble inserted into ID/EX)
 - `ex_mem_rt_data` also carries the forwarded value so that `SW` writes correct data even when its source register was just written
 
+**Branch and return prediction**
+- ***BTB/BHT:*** `TABLE_SIZE=6` provides 64 tagged entries and two-bit saturating direction counters. ID lookup uses the instruction's saved `PC+1`. Counters initialize to strongly not taken (`00`).
+- ***Conditional branches:*** a predicted taken branch redirects PC in ID and discards the sequential fetch. EX resolves the outcome, updates the predictor, and flushes younger instructions on a direction mismatch.
+- ***RAS:*** `RAS_SIZE=3` allocates eight return-address slots. JAL pushes a return address in EX; a nonempty RAS predicts `JR $31` in ID. EX compares the prediction with the forwarded register target and redirects on a mismatch or an unpredicted JR. The current pointer and push guard permit seven outstanding pushes.
+- ***J/JAL:*** direct jumps redirect in EX and flush younger instructions. JAL writes its saved `PC+1` to `$31` through the pipeline.
+- ***Reset:*** RST clears pipeline/register state and the RAS. BTB/BHT state initializes at simulation startup and is not cleared by RST, so predictor history can persist between test phases.
+
 **HALT** — PC freezes when HALT is asserted; instructions already in the pipeline drain normally.
 
 ### ISA
@@ -97,6 +104,7 @@ The testbench is structured around UVM concepts adapted to plain SystemVerilog, 
 | 5 | Hazards: EX→EX forwarding, MEM→EX forwarding, load-use stall |
 | 6 | Extended instructions: ADD8, RBIT, REV, SADD (normal + saturate), SSUB (saturate) |
 | 7 | HALT: PC freezes, releases correctly |
+| 8 | Recursive Fibonacci: final `$2 = fib(7) = 13` |
 
 ### Sample output
 
@@ -111,13 +119,13 @@ The testbench is structured around UVM concepts adapted to plain SystemVerilog, 
 # 
 # ============================================================
 #   SCOREBOARD REPORT
-#   Total : 28  |  PASS : 28  |  FAIL : 0
+#   Total : 29  |  PASS : 29  |  FAIL : 0
 #   *** ALL TESTS PASSED ***
 # ============================================================
 # 
 # ============================================================
 #   COVERAGE REPORT
-#   Instruction coverage : 22/22 (100.0%)
+#   Instruction coverage : 26/26 (100.0%)
 #     ADD        :  HIT
 #     ADDI       :  HIT
 #     SUB        :  HIT
@@ -140,24 +148,44 @@ The testbench is structured around UVM concepts adapted to plain SystemVerilog, 
 #     ADD8       :  HIT
 #     SADD       :  HIT
 #     SSUB       :  HIT
+#     RESET      :  HIT
+#     HALT       :  HIT
+#     FORWARDING :  HIT
+#     LOAD-USE   :  HIT
 #   Hazard coverage:
-#     EX/MEMâEX forwarding :  HIT
-#     MEM/WBâEX forwarding :  HIT
+#     EX/MEM->EX forwarding :  HIT
+#     MEM/WB->EX forwarding :  HIT
 #     Load-use stall       :  HIT
 #     Branch/Jump flush    :  HIT
 #     HALT                 :  HIT
 #     RESET                :  HIT
+#   Branch/Jump statistics at FIBONACCI:
+#     Total branches (taken/all): 20 / 41
+#     Total BTB predict accuracy: 48.8%
+#     Total jump calls          : 41
 # ============================================================
+# [SUMMARY] total_fail=0
 ```
 
+### Recursive Fibonacci workload
+
+The program passes `n=7` in `$4`, initializes software stack pointer `$29` to word index 90, and calls `fib` at instruction index 4. Each non-base invocation allocates a *three-word frame* containing its return address, saved argument, and `fib(n-1)` result. The base case returns `n` for `n<2`; other invocations add `fib(n-1)` and `fib(n-2)`.
+
+The workload exercises nested JAL/JR control flow, stack loads/stores, forwarding, load-use stalls, conditional branch prediction, and return prediction. Completion is detected when a JR in EX targets the main return index 3, followed by five wait cycles and HALT. The scoreboard checks the final result rather than every executed instruction.
+
+The supplied simulation excerpt reports:
+```text
+[PASS] FIBONACCI   got=0x0000000d
+[STATS] fib(7): branches=41 taken=20 (48.8%) calls(JAL)=41
 ---
 
 ## Files
 
 ```
 MIPS_pipeline.sv       — 5-stage pipelined processor
-MIPS_b.sv              — multi-cycle baseline (lab original)
 MIPS_Testbench.sv      — DV-style verification environment
+
+MIPS_b.sv              — multi-cycle baseline (lab original)
 regfile.v              — register file (shared)
 seven_seg.v            — 7-segment display driver (FPGA)
 top_partA.v            — FPGA top for Part A (LED rotation)
@@ -171,7 +199,8 @@ program_partB.hex      — Part B test program machine code
 
 ## Tools
 
-- **Simulation**: ModelSim (run.do stript including `vlog -sv`, `vsim -voptargs=+acc`)
+- **Simulation**: ModelSim (run.do script including `vlog -sv`, `vsim -voptargs=+acc`)
+- **Synthesis** : Genus (syn.tcl for pre-APR area and power extimation)
 
 ---
 
@@ -181,7 +210,9 @@ program_partB.hex      — Part B test program machine code
 - [x] 5-stage pipeline core
 - [x] Forwarding (EX/MEM→EX, MEM/WB→EX)
 - [x] Load-use hazard stall
+- [x] BTB/BHT branch prediction and RAS return prediction
 - [x] DV testbench with scoreboard and coverage
+- [x] Recursive Fibonacci workload; supplied excerpt shows `fib(7)=13`
 - [ ] Complete Siemens UVM training and port testbench to true UVM
 
 ---
